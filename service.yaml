@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+    name: nginx-svc                                               #service的名字
+spec:
+  selector:                                                       #代理有app=nginx-container的pod
+    app: nginx-container
+  type: NodePort                                                  #nodePort表示将node宿主机的端口向外暴露，让外面访问
+  ports:
+  - targetPort: 80                                                #容器内部的port  比如nginx启动后就是基于80
+    port: 88                                                      #k8s集群内部访问的端口
+    nodePort: 30010                                               #映射到宿主机的端口     可以加宿主机的IP地址:30010访问到service代理的pod
+
