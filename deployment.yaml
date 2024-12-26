@@ -1,0 +1,120 @@
+apiVersion: apps/v1                       #api版本
+kind: Deployment                          #创建的资源类型
+metadata:                                 #指定资源的元数据
+  name: test-hostpath                     #deploy资源命名
+  labels:                                 #deploy资源标签 app: hostpath
+    app: hostpath
+  namespace: default                      #指定命名空间，不指定的话默认是default命名空间
+spec:                                     #规划资源
+  replicas: 3                             #创建pod的副本数量
+  selector:                               #以pod 的label进行匹配管理，因为deploy是一个控制器，用控制器来管理pod
+    matchLabels:
+      app: test-hostpath
+  template:                               #定义pod的模板，上面定义selector就是来匹配这个的
+    metadata:                             #pod 元数据
+      labels:                             #pod 的标签对应deploy.spec.selector.matchLabels下面的标签
+        app: test-hostpath
+    spec:                                 #规划pod的创建
+      affinity:                           #pod亲和性
+        nodeAffinity:                     #node节点亲和性
+          requiredDuringSchedulingIgnoredDuringExecution:       #node节点硬亲和性
+            nodeSelectorTerms:            #以node的label进行选择调度到那个node
+            - matchExpressions:
+              - key: name                 #定义的label是name=sjl
+                operator: In
+                values:
+                - sjl
+      volumes:                            #创建存储卷 volumes
+      - hostPath:     #类型是hostPath，缺点就是如果pod删除之后重新调度的话没有调度到原来的node数据会丢失因为其他node节点没有下面指定的挂载目录
+          path: /hostpath-dir             #定义宿主机的需要挂载的目录
+          type: DirectoryOrCreate         #类型就是如何宿主机没有/hostpath-dir目录会自动创建
+        name: hostpath                    #存储卷的名字
+      containers:                         #定义pod里面容器
+      - name: caddy-hostpath              #容器名字
+        image: docker.io/library/caddy:v1 #指定容器镜像，记得事前在node节点中导入镜像，或者可以指定从自己的私仓拉取
+        imagePullPolicy: IfNotPresent     #镜像拉取策略，如何本地没有的话就会从默认dockerhub上面拉取镜像
+        volumeMounts:                     #挂载存储卷
+        - name: hostpath                  #存储卷的名字，就是上面定义的存储卷的名字
+          mountPath: /caddy-hostpath      #挂载的容器中那个目录里面
+      - name: tomcat-hostpath             #容器名字
+        image: docker.io/library/tomcat:8.5-jre8-alpine   #指定容器镜像，记得事前在node节点中导入镜像，或者可以指定从自己的私仓拉取
+        imagePullPolicy: IfNotPresent     #镜像拉取策略，如何本地没有的话就会从默认dockerhub上面拉取镜像
+        volumeMounts:                     #挂载存储卷
+        - name: hostpath                  #存储卷的名字，就是上面定义的存储卷的名字
+          mountPath: /tomcat-hostpath     #挂载的容器中那个目录里面
+
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test        #pod名字
+  labels:
+    app: nginx      #pod标签  app=nginx
+spec:
+  strategy:           #deployment 的更新策略
+    rollingUpdate:
+      maxSurge: 1     #表示最大存在的pod等于 副本数加1
+      maxUnavailable: 0     #表示最少的的pod等于 pod副本数不变
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx-container     #deploy 基于这个标签选择器来选择下面template创建的容器
+  template:
+    metadata:
+      labels:
+        app: nginx-container    #容器标签对应上面的matchlabels
+    spec:
+      restartPolicy: OnFailure   #pod的重启策略  onfailure表示非正常退出的时候显示
+      nodeSelector:              #pod基于node标签选择调度到那个node节点上面
+        app: node3
+      volumes:
+      - name: storageclass-test
+        persistentVolumeClaim:      #基于pvc的类型创建volume
+          claimName: index-storage  #pvc的名字        先创建pv之后创建pvc再进行bond绑定
+          readOnly: ReadWriteMany   #对这个卷的权限  读写
+      - name: host-mnt
+        hostPath:     #基于hostPath创建volume
+          path: /test-nginx         #宿主机的目录后续下面定义挂载到容器中的那个目录上
+          type: DirectoryOrCreate   #这个type表示如果宿主机上面没有这个目录的话会自动创建
+      - name: nginx-conf
+        configMap:    #机遇configmap创建的volume       configmap是k8s专门存放明文的对象类型
+          name: nginx-conf        #提前创建好的configmap名字
+      containers:
+      - name: nginx-con       #容器名字
+        image: sjl-nginx      #基于的镜像
+        imagePullPolicy: IfNotPresent     #imagePullpolicy镜像拉取策略，IfNotPresent表示如果本地没有的话就会拉取上面指定的镜像，
+                                                                 #还有Never策略这个策略表示只在本地找上面指定的镜像
+                                                                 #还有Always策略这个策略表示只拉取上面指定的镜像
+        volumeMounts:
+        - name: storageclass-test                                 #上面定义的卷的名字
+          mountPath: /usr/share/nginx/html/                       #挂载的目录
+        - name: host-mnt
+          mountPath: /mnt
+        - name: nginx-conf
+          mountPath: /etc/nginx/
+        startupProbe:                                             #启动探测
+          httpGet:                                                #基于httpGet的类型
+            port: 80                                              #访问容器的80端口探测
+            scheme: HTTP                                          #基于http协议探测
+            path: /                                               #基于网站的/目录进行探测
+          initialDelaySeconds: 5                                  #这个表示容器启动后5秒之后开始探视
+          successThreshold: 5                                     #这个表示探测成功5秒之后
+          timeoutSeconds: 2                                       #超时时间  比如就是curl 网站ip 然后请求超时的时候
+        ports:
+        - containerPort: 80                                       #pod暴露的端口
+---
+apiVersion: v1
+kind: Service
+metadata:
+    name: nginx-svc                                               #service的名字
+spec:
+  selector:                                                       #代理有app=nginx-container的pod
+    app: nginx-container
+  type: NodePort                                                  #nodePort表示将node宿主机的端口向外暴露，让外面访问
+  ports:
+  - targetPort: 80                                                #容器内部的port  比如nginx启动后就是基于80
+    port: 88                                                      #k8s集群内部访问的端口
+    nodePort: 30010                                               #映射到宿主机的端口     可以加宿主机的IP地址:30010访问到service代理的pod
+
+
